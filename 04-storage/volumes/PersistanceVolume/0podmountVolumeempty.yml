@@ -1,0 +1,36 @@
+---
+apiVersion:
+kind: Pod 
+metadata:
+  name: redis-pod
+  labels:
+    type: db
+spec: 
+  containers:
+    - name: myredis
+      image: redis
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "250m"
+        limits:
+          memory: "128Mi"
+          cpu: "500m"
+      volumeMounts:
+        - name: redis-volume
+          mountPath: /data/redis    
+  volumes:
+    - name: redis-volume
+      emptyDir: {}
+...      
+#emptdirectory create mount
+#here although pod is in running state we need to go inside the pod and check whether the directory is been created
+#for that kubectl exec - it redis-pod -- bash
+#in redis we check whether directory is created cd /data/redis/ alos here create an file1 and add some content here
+#also restart the Pod for that install some package for redis to restart/ kill the process
+#apt-get update
+#pt-get install procps
+#ps -ef
+#kill 1 (PID) 
+#once it is restarted check or go inside the pod and check the file and directory is present
+#but here the installation of any packages or s/w is been not present once the pods is been restarted

@@ -1,0 +1,29 @@
+---
+apiVersion: v1
+kind: Pod 
+metadata:
+  name: httpd-pod
+  labels:
+    type: webserver
+    author: Imran
+spec:
+  containers:
+    - name: myhttpd
+      image: httpd 
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "250m"
+        limits:
+          memory: "128Mi"
+          cpu: "500m"      
+  toleration:
+    - key: slave2
+      operator: Equal
+      value: imran2
+      effect: NoSchedule
+
+#here though the nodes/slave is been tainted than also the Pod will be deploy on the tainted nodes/slaves
+#kubectl taint nodes "node_name" node1=imran1:Noschedule (Taint Node Command) 
+                                #  KEY  VALUE  EFFEC
+#kubectl taint nodes "node_name" node1=imran1:Noschedule- (unTaint the Node Command)     
