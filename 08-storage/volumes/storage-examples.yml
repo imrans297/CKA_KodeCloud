@@ -1,0 +1,150 @@
+# EmptyDir Volume
+apiVersion: v1
+kind: Pod
+metadata:
+  name: emptydir-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: cache-volume
+      mountPath: /cache
+  - name: sidecar
+    image: busybox
+    command: ['sh', '-c', 'while true; do echo $(date) >> /cache/log.txt; sleep 30; done']
+    volumeMounts:
+    - name: cache-volume
+      mountPath: /cache
+  volumes:
+  - name: cache-volume
+    emptyDir: {}
+
+---
+# HostPath Volume
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hostpath-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: host-volume
+      mountPath: /host-data
+  volumes:
+  - name: host-volume
+    hostPath:
+      path: /data
+      type: DirectoryOrCreate
+
+---
+# ConfigMap Volume
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  app.properties: |
+    database.host=localhost
+    database.port=5432
+  nginx.conf: |
+    server {
+        listen 80;
+        location / {
+            return 200 'Hello World';
+        }
+    }
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: configmap-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: config-volume
+      mountPath: /etc/config
+  volumes:
+  - name: config-volume
+    configMap:
+      name: app-config
+
+---
+# Secret Volume
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+type: Opaque
+data:
+  username: YWRtaW4=  # admin
+  password: MWYyZDFlMmU2N2Rm  # 1f2d1e2e67df
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secret-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: secret-volume
+      mountPath: /etc/secrets
+      readOnly: true
+  volumes:
+  - name: secret-volume
+    secret:
+      secretName: app-secret
+
+---
+# PersistentVolume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-example
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /mnt/data
+
+---
+# PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-example
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+
+---
+# Pod using PVC
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: storage
+      mountPath: /data
+  volumes:
+  - name: storage
+    persistentVolumeClaim:
+      claimName: pvc-example

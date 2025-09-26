@@ -1,0 +1,387 @@
+# Pre-Upgrade Backup Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pre-upgrade-backup
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: upgrade-service-account
+      containers:
+      - name: backup
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          DATE=$(date +%Y%m%d_%H%M%S)
+          BACKUP_DIR="/backup/pre-upgrade-$DATE"
+          mkdir -p $BACKUP_DIR
+          
+          echo "Creating pre-upgrade backup: $BACKUP_DIR"
+          
+          # Backup all cluster resources
+          kubectl get all --all-namespaces -o yaml > $BACKUP_DIR/all-resources.yaml
+          kubectl get pv -o yaml > $BACKUP_DIR/persistent-volumes.yaml
+          kubectl get storageclass -o yaml > $BACKUP_DIR/storage-classes.yaml
+          kubectl get clusterroles -o yaml > $BACKUP_DIR/cluster-roles.yaml
+          kubectl get clusterrolebindings -o yaml > $BACKUP_DIR/cluster-role-bindings.yaml
+          kubectl get crd -o yaml > $BACKUP_DIR/custom-resources.yaml
+          kubectl get nodes -o yaml > $BACKUP_DIR/nodes.yaml
+          
+          # Create upgrade info file
+          kubectl version --short > $BACKUP_DIR/version-info.txt
+          kubectl get nodes -o wide >> $BACKUP_DIR/version-info.txt
+          
+          echo "Pre-upgrade backup completed: $BACKUP_DIR"
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-pvc
+      restartPolicy: Never
+
+---
+# Upgrade Validation Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: upgrade-validation
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: upgrade-service-account
+      containers:
+      - name: validation
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting post-upgrade validation..."
+          
+          # Check cluster health
+          kubectl cluster-info
+          
+          # Check all nodes are ready
+          NOT_READY=$(kubectl get nodes --no-headers | grep -v Ready | wc -l)
+          if [ $NOT_READY -gt 0 ]; then
+            echo "ERROR: $NOT_READY nodes are not ready"
+            kubectl get nodes
+            exit 1
+          fi
+          echo "✓ All nodes are ready"
+          
+          # Check system pods
+          SYSTEM_PODS_NOT_READY=$(kubectl get pods -n kube-system --no-headers | grep -v Running | grep -v Completed | wc -l)
+          if [ $SYSTEM_PODS_NOT_READY -gt 0 ]; then
+            echo "ERROR: $SYSTEM_PODS_NOT_READY system pods are not running"
+            kubectl get pods -n kube-system | grep -v Running | grep -v Completed
+            exit 1
+          fi
+          echo "✓ All system pods are running"
+          
+          # Test basic functionality
+          kubectl run validation-test --image=nginx --rm --restart=Never --timeout=60s -- /bin/true
+          if [ $? -eq 0 ]; then
+            echo "✓ Basic pod creation works"
+          else
+            echo "ERROR: Pod creation failed"
+            exit 1
+          fi
+          
+          # Check API server health
+          kubectl get --raw /healthz
+          if [ $? -eq 0 ]; then
+            echo "✓ API server is healthy"
+          else
+            echo "ERROR: API server health check failed"
+            exit 1
+          fi
+          
+          echo "✓ Upgrade validation completed successfully"
+      restartPolicy: Never
+
+---
+# Service Account for Upgrade Operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: upgrade-service-account
+  namespace: kube-system
+
+---
+# ClusterRole for Upgrade Operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: upgrade-cluster-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list", "create", "delete"]
+
+---
+# ClusterRoleBinding for Upgrade Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: upgrade-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: upgrade-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: upgrade-service-account
+  namespace: kube-system
+
+---
+# Upgrade Monitoring ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: upgrade-monitoring
+  namespace: kube-system
+data:
+  monitor-upgrade.sh: |
+    #!/bin/bash
+    
+    echo "Monitoring cluster during upgrade..."
+    
+    # Monitor node status
+    echo "=== Node Status ==="
+    kubectl get nodes -o wide
+    
+    # Monitor system pods
+    echo "=== System Pods ==="
+    kubectl get pods -n kube-system
+    
+    # Check for failed pods
+    FAILED_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Failed --no-headers | wc -l)
+    if [ $FAILED_PODS -gt 0 ]; then
+      echo "WARNING: $FAILED_PODS failed pods detected"
+      kubectl get pods --all-namespaces --field-selector=status.phase=Failed
+    fi
+    
+    # Check for pending pods
+    PENDING_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Pending --no-headers | wc -l)
+    if [ $PENDING_PODS -gt 0 ]; then
+      echo "WARNING: $PENDING_PODS pending pods detected"
+      kubectl get pods --all-namespaces --field-selector=status.phase=Pending
+    fi
+    
+    # Check cluster events
+    echo "=== Recent Events ==="
+    kubectl get events --sort-by=.metadata.creationTimestamp | tail -10
+    
+    # Check component status
+    echo "=== Component Status ==="
+    kubectl get componentstatuses
+    
+    echo "Monitoring completed"
+
+---
+# Upgrade Monitoring Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: upgrade-monitoring
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: upgrade-service-account
+      containers:
+      - name: monitor
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - /scripts/monitor-upgrade.sh
+        volumeMounts:
+        - name: monitoring-script
+          mountPath: /scripts
+      volumes:
+      - name: monitoring-script
+        configMap:
+          name: upgrade-monitoring
+          defaultMode: 0755
+      restartPolicy: Never
+
+---
+# Post-Upgrade Cleanup Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: post-upgrade-cleanup
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: upgrade-service-account
+      containers:
+      - name: cleanup
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting post-upgrade cleanup..."
+          
+          # Clean up completed jobs older than 24 hours
+          kubectl get jobs --all-namespaces -o json | \
+          jq -r '.items[] | select(.status.conditions[]?.type == "Complete") | select(.metadata.creationTimestamp | fromdateiso8601 < (now - 86400)) | "\(.metadata.namespace) \(.metadata.name)"' | \
+          while read namespace name; do
+            echo "Deleting completed job: $namespace/$name"
+            kubectl delete job $name -n $namespace
+          done
+          
+          # Clean up failed pods
+          kubectl get pods --all-namespaces --field-selector=status.phase=Failed -o json | \
+          jq -r '.items[] | "\(.metadata.namespace) \(.metadata.name)"' | \
+          while read namespace name; do
+            echo "Deleting failed pod: $namespace/$name"
+            kubectl delete pod $name -n $namespace
+          done
+          
+          # Clean up evicted pods
+          kubectl get pods --all-namespaces -o json | \
+          jq -r '.items[] | select(.status.reason == "Evicted") | "\(.metadata.namespace) \(.metadata.name)"' | \
+          while read namespace name; do
+            echo "Deleting evicted pod: $namespace/$name"
+            kubectl delete pod $name -n $namespace
+          done
+          
+          echo "Post-upgrade cleanup completed"
+      restartPolicy: Never
+
+---
+# Rollback Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cluster-rollback
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: upgrade-service-account
+      containers:
+      - name: rollback
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          ROLLBACK_DATE=${ROLLBACK_DATE}
+          
+          if [ -z "$ROLLBACK_DATE" ]; then
+            echo "ERROR: ROLLBACK_DATE environment variable must be set"
+            exit 1
+          fi
+          
+          BACKUP_DIR="/backup/pre-upgrade-$ROLLBACK_DATE"
+          
+          if [ ! -d "$BACKUP_DIR" ]; then
+            echo "ERROR: Backup directory not found: $BACKUP_DIR"
+            exit 1
+          fi
+          
+          echo "Rolling back to backup: $BACKUP_DIR"
+          
+          # Note: This only restores Kubernetes resources
+          # ETCD and node-level rollback must be done manually
+          
+          # Restore cluster resources
+          if [ -f "$BACKUP_DIR/all-resources.yaml" ]; then
+            kubectl apply -f $BACKUP_DIR/all-resources.yaml --force
+          fi
+          
+          if [ -f "$BACKUP_DIR/persistent-volumes.yaml" ]; then
+            kubectl apply -f $BACKUP_DIR/persistent-volumes.yaml --force
+          fi
+          
+          if [ -f "$BACKUP_DIR/storage-classes.yaml" ]; then
+            kubectl apply -f $BACKUP_DIR/storage-classes.yaml --force
+          fi
+          
+          echo "Resource rollback completed"
+          echo "WARNING: Manual ETCD and node rollback may be required"
+        env:
+        - name: ROLLBACK_DATE
+          value: ""  # Set this to the backup date to rollback to
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-pvc
+      restartPolicy: Never
+
+---
+# Upgrade Status ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: upgrade-status
+  namespace: kube-system
+data:
+  status: "not-started"
+  version-from: ""
+  version-to: ""
+  started-at: ""
+  completed-at: ""
+  notes: ""
+
+---
+# Upgrade Progress Monitoring DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: upgrade-progress-monitor
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: upgrade-progress-monitor
+  template:
+    metadata:
+      labels:
+        app: upgrade-progress-monitor
+    spec:
+      hostNetwork: true
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: monitor
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "Node: $(hostname)"
+            echo "Kubelet version: $(kubelet --version 2>/dev/null || echo 'Not available')"
+            echo "Timestamp: $(date)"
+            echo "---"
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys

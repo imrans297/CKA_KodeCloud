@@ -1,0 +1,78 @@
+# ClusterIP Service (Default)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    app: nginx
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+
+---
+# NodePort Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-nodeport
+spec:
+  selector:
+    app: web
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+    nodePort: 30080
+  type: NodePort
+
+---
+# LoadBalancer Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-loadbalancer
+spec:
+  selector:
+    app: myapp
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer
+
+---
+# Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: database-headless
+spec:
+  clusterIP: None
+  selector:
+    app: database
+  ports:
+  - protocol: TCP
+    port: 3306
+    targetPort: 3306
+
+---
+# Multi-Port Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-port-service
+spec:
+  selector:
+    app: webapp
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 8080
+  - name: https
+    protocol: TCP
+    port: 443
+    targetPort: 8443

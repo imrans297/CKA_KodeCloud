@@ -1,0 +1,473 @@
+# Basic HPA Example
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: webapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: webapp
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# Advanced HPA with Multiple Metrics
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: advanced-webapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: advanced-webapp
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+# VPA Example
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: webapp-vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: webapp
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: webapp
+      maxAllowed:
+        cpu: 2
+        memory: 2Gi
+      minAllowed:
+        cpu: 100m
+        memory: 128Mi
+      controlledResources: ["cpu", "memory"]
+
+---
+# Sample Application for Scaling
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+      - name: webapp
+        image: k8s.gcr.io/hpa-example
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+---
+# Service for Sample Application
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp-service
+spec:
+  selector:
+    app: webapp
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+
+---
+# Advanced Application with Custom Metrics
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: advanced-webapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: advanced-webapp
+  template:
+    metadata:
+      labels:
+        app: advanced-webapp
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: webapp
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        - containerPort: 8080
+          name: metrics
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      - name: metrics-exporter
+        image: nginx/nginx-prometheus-exporter:0.10.0
+        args:
+        - -nginx.scrape-uri=http://localhost/nginx_status
+        ports:
+        - containerPort: 9113
+          name: metrics
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+
+---
+# Custom Metrics HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: custom-metrics-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: advanced-webapp
+  minReplicas: 1
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Pods
+    pods:
+      metric:
+        name: nginx_http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "100"
+
+---
+# Load Generator for Testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: load-generator
+  template:
+    metadata:
+      labels:
+        app: load-generator
+    spec:
+      containers:
+      - name: load-generator
+        image: busybox:1.35
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            wget -q -O- http://webapp-service/
+            sleep 0.01
+          done
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+---
+# Burst Load Generator
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: burst-load-test
+spec:
+  parallelism: 5
+  completions: 5
+  template:
+    spec:
+      containers:
+      - name: load-test
+        image: busybox:1.35
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting burst load test..."
+          for i in $(seq 1 1000); do
+            wget -q -O- http://webapp-service/ &
+            if [ $((i % 50)) -eq 0 ]; then
+              wait
+              echo "Completed $i requests"
+            fi
+          done
+          wait
+          echo "Burst load test completed"
+      restartPolicy: Never
+
+---
+# Scheduled Scaling with CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scale-up-job
+spec:
+  schedule: "0 9 * * 1-5"  # Scale up at 9 AM on weekdays
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: scaling-service-account
+          containers:
+          - name: scale-up
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Scaling up for business hours..."
+              kubectl scale deployment webapp --replicas=10
+              echo "Scaled up to 10 replicas"
+          restartPolicy: OnFailure
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scale-down-job
+spec:
+  schedule: "0 18 * * 1-5"  # Scale down at 6 PM on weekdays
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: scaling-service-account
+          containers:
+          - name: scale-down
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Scaling down for off-hours..."
+              kubectl scale deployment webapp --replicas=2
+              echo "Scaled down to 2 replicas"
+          restartPolicy: OnFailure
+
+---
+# Service Account for Scaling Operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scaling-service-account
+
+---
+# Role for Scaling Operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-role
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "patch", "update"]
+
+---
+# RoleBinding for Scaling Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-role-binding
+subjects:
+- kind: ServiceAccount
+  name: scaling-service-account
+roleRef:
+  kind: Role
+  name: scaling-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# PodDisruptionBudget for Scaling
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: webapp-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: webapp
+
+---
+# Resource Quota for Scaling Limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: scaling-quota
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: 20Gi
+    limits.cpu: "20"
+    limits.memory: 40Gi
+    pods: "50"
+
+---
+# LimitRange for Pod Resources
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: scaling-limits
+spec:
+  limits:
+  - default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    type: Container
+
+---
+# Monitoring ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: webapp-metrics
+spec:
+  selector:
+    matchLabels:
+      app: advanced-webapp
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+
+---
+# Network Policy for Scaled Applications
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webapp-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: webapp
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: load-generator
+    ports:
+    - protocol: TCP
+      port: 80
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53

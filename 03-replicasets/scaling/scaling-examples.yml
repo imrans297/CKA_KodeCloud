@@ -1,0 +1,84 @@
+# Basic ReplicaSet for Scaling Practice
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: scaling-demo
+  labels:
+    app: scaling-demo
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: scaling-demo
+  template:
+    metadata:
+      labels:
+        app: scaling-demo
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+---
+# ReplicaSet with Resource Constraints
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: resource-limited-rs
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: resource-demo
+  template:
+    metadata:
+      labels:
+        app: resource-demo
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.20
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+---
+# High Replica Count ReplicaSet
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: high-replica-rs
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: high-replica
+  template:
+    metadata:
+      labels:
+        app: high-replica
+    spec:
+      containers:
+      - name: lightweight
+        image: busybox:1.35
+        command: ['sleep', '3600']
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

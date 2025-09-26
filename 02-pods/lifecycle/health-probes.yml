@@ -1,0 +1,80 @@
+# Pod with All Health Probes
+apiVersion: v1
+kind: Pod
+metadata:
+  name: health-check-pod
+spec:
+  containers:
+  - name: app
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      successThreshold: 1
+      failureThreshold: 3
+    startupProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 30
+
+---
+# Pod with Init Containers
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-container-pod
+spec:
+  initContainers:
+  - name: init-db
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Initializing database..." && sleep 10']
+  - name: init-cache
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Setting up cache..." && sleep 5']
+  containers:
+  - name: main-app
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+
+---
+# Pod with Lifecycle Hooks
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-hooks-pod
+spec:
+  containers:
+  - name: app
+    image: nginx:1.20
+    lifecycle:
+      postStart:
+        exec:
+          command: ["/bin/sh", "-c", "echo 'Container started at $(date)' >> /var/log/lifecycle.log"]
+      preStop:
+        exec:
+          command: ["/bin/sh", "-c", "echo 'Container stopping at $(date)' >> /var/log/lifecycle.log && nginx -s quit"]
+    volumeMounts:
+    - name: log-volume
+      mountPath: /var/log
+  volumes:
+  - name: log-volume
+    emptyDir: {}

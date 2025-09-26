@@ -1,0 +1,397 @@
+# Cluster Health Check CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cluster-health-check
+  namespace: kube-system
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: maintenance-service-account
+          containers:
+          - name: health-check
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "=== Cluster Health Check $(date) ==="
+              
+              # Check API server
+              if kubectl cluster-info > /dev/null 2>&1; then
+                echo "✓ API Server: Healthy"
+              else
+                echo "✗ API Server: Unhealthy"
+                exit 1
+              fi
+              
+              # Check nodes
+              NOT_READY_NODES=$(kubectl get nodes --no-headers | grep -v Ready | wc -l)
+              TOTAL_NODES=$(kubectl get nodes --no-headers | wc -l)
+              if [ $NOT_READY_NODES -eq 0 ]; then
+                echo "✓ Nodes: All $TOTAL_NODES nodes ready"
+              else
+                echo "✗ Nodes: $NOT_READY_NODES/$TOTAL_NODES not ready"
+                kubectl get nodes | grep -v Ready
+              fi
+              
+              # Check system pods
+              SYSTEM_PODS_ISSUES=$(kubectl get pods -n kube-system --no-headers | grep -v Running | grep -v Completed | wc -l)
+              if [ $SYSTEM_PODS_ISSUES -eq 0 ]; then
+                echo "✓ System Pods: All healthy"
+              else
+                echo "✗ System Pods: $SYSTEM_PODS_ISSUES issues"
+                kubectl get pods -n kube-system | grep -v Running | grep -v Completed
+              fi
+              
+              # Check for failed pods across all namespaces
+              FAILED_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Failed --no-headers | wc -l)
+              if [ $FAILED_PODS -eq 0 ]; then
+                echo "✓ Application Pods: No failed pods"
+              else
+                echo "⚠ Application Pods: $FAILED_PODS failed pods"
+                kubectl get pods --all-namespaces --field-selector=status.phase=Failed
+              fi
+              
+              echo "Health check completed"
+          restartPolicy: OnFailure
+
+---
+# Resource Cleanup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resource-cleanup
+  namespace: kube-system
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: maintenance-service-account
+          containers:
+          - name: cleanup
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting resource cleanup..."
+              
+              # Clean up completed jobs older than 24 hours
+              echo "Cleaning up old completed jobs..."
+              kubectl get jobs --all-namespaces -o json | \
+              jq -r '.items[] | select(.status.conditions[]?.type == "Complete") | select(.metadata.creationTimestamp | fromdateiso8601 < (now - 86400)) | "\(.metadata.namespace) \(.metadata.name)"' | \
+              while read namespace name; do
+                if [ ! -z "$namespace" ] && [ ! -z "$name" ]; then
+                  echo "Deleting completed job: $namespace/$name"
+                  kubectl delete job $name -n $namespace
+                fi
+              done
+              
+              # Clean up failed pods
+              echo "Cleaning up failed pods..."
+              kubectl get pods --all-namespaces --field-selector=status.phase=Failed -o json | \
+              jq -r '.items[] | "\(.metadata.namespace) \(.metadata.name)"' | \
+              while read namespace name; do
+                if [ ! -z "$namespace" ] && [ ! -z "$name" ]; then
+                  echo "Deleting failed pod: $namespace/$name"
+                  kubectl delete pod $name -n $namespace
+                fi
+              done
+              
+              # Clean up evicted pods
+              echo "Cleaning up evicted pods..."
+              kubectl get pods --all-namespaces -o json | \
+              jq -r '.items[] | select(.status.reason == "Evicted") | "\(.metadata.namespace) \(.metadata.name)"' | \
+              while read namespace name; do
+                if [ ! -z "$namespace" ] && [ ! -z "$name" ]; then
+                  echo "Deleting evicted pod: $namespace/$name"
+                  kubectl delete pod $name -n $namespace
+                fi
+              done
+              
+              echo "Resource cleanup completed"
+          restartPolicy: OnFailure
+
+---
+# Node Maintenance Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: node-maintenance
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: maintenance-service-account
+      containers:
+      - name: node-maintenance
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          NODE_NAME=${NODE_NAME}
+          
+          if [ -z "$NODE_NAME" ]; then
+            echo "ERROR: NODE_NAME environment variable must be set"
+            exit 1
+          fi
+          
+          echo "Starting maintenance for node: $NODE_NAME"
+          
+          # Cordon node
+          echo "Cordoning node..."
+          kubectl cordon $NODE_NAME
+          
+          # Drain node
+          echo "Draining node..."
+          kubectl drain $NODE_NAME --ignore-daemonsets --delete-emptydir-data --timeout=300s
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Node $NODE_NAME successfully drained"
+            echo "Node is ready for maintenance"
+            echo "Run 'kubectl uncordon $NODE_NAME' after maintenance is complete"
+          else
+            echo "✗ Failed to drain node $NODE_NAME"
+            exit 1
+          fi
+        env:
+        - name: NODE_NAME
+          value: ""  # Set this to the node name to maintain
+      restartPolicy: Never
+
+---
+# Certificate Expiry Check CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cert-expiry-check
+  namespace: kube-system
+spec:
+  schedule: "0 6 * * 0"  # Weekly on Sunday at 6 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostNetwork: true
+          containers:
+          - name: cert-check
+            image: k8s.gcr.io/etcd:3.5.0-0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Checking certificate expiration..."
+              
+              # Check API server certificate
+              if [ -f /etc/kubernetes/pki/apiserver.crt ]; then
+                EXPIRY=$(openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -enddate | cut -d= -f2)
+                EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+                CURRENT_EPOCH=$(date +%s)
+                DAYS_LEFT=$(( (EXPIRY_EPOCH - CURRENT_EPOCH) / 86400 ))
+                
+                echo "API Server certificate expires in $DAYS_LEFT days ($EXPIRY)"
+                
+                if [ $DAYS_LEFT -lt 30 ]; then
+                  echo "WARNING: API Server certificate expires in less than 30 days!"
+                fi
+              fi
+              
+              # Check ETCD certificate
+              if [ -f /etc/kubernetes/pki/etcd/server.crt ]; then
+                EXPIRY=$(openssl x509 -in /etc/kubernetes/pki/etcd/server.crt -noout -enddate | cut -d= -f2)
+                EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+                CURRENT_EPOCH=$(date +%s)
+                DAYS_LEFT=$(( (EXPIRY_EPOCH - CURRENT_EPOCH) / 86400 ))
+                
+                echo "ETCD certificate expires in $DAYS_LEFT days ($EXPIRY)"
+                
+                if [ $DAYS_LEFT -lt 30 ]; then
+                  echo "WARNING: ETCD certificate expires in less than 30 days!"
+                fi
+              fi
+              
+              echo "Certificate check completed"
+            volumeMounts:
+            - name: k8s-certs
+              mountPath: /etc/kubernetes/pki
+              readOnly: true
+          volumes:
+          - name: k8s-certs
+            hostPath:
+              path: /etc/kubernetes/pki
+          restartPolicy: OnFailure
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+
+---
+# Service Account for Maintenance Operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maintenance-service-account
+  namespace: kube-system
+
+---
+# ClusterRole for Maintenance Operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maintenance-cluster-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list", "delete", "patch", "update"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "patch", "update"]
+
+---
+# ClusterRoleBinding for Maintenance Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maintenance-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maintenance-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: maintenance-service-account
+  namespace: kube-system
+
+---
+# Maintenance Window ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maintenance-schedule
+  namespace: kube-system
+data:
+  schedule.yaml: |
+    maintenance_windows:
+      - name: "weekly-patching"
+        schedule: "0 2 * * 0"  # Sunday 2 AM
+        duration: "4h"
+        type: "rolling"
+        description: "Weekly security patches"
+      
+      - name: "monthly-updates"
+        schedule: "0 1 1 * *"  # First day of month 1 AM
+        duration: "6h"
+        type: "planned-downtime"
+        description: "Monthly system updates"
+      
+      - name: "quarterly-upgrade"
+        schedule: "0 0 1 1,4,7,10 *"  # Quarterly
+        duration: "8h"
+        type: "major-upgrade"
+        description: "Kubernetes version upgrade"
+
+---
+# Maintenance Status Monitor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maintenance-status-monitor
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: maintenance-status-monitor
+  template:
+    metadata:
+      labels:
+        app: maintenance-status-monitor
+    spec:
+      serviceAccountName: maintenance-service-account
+      containers:
+      - name: monitor
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "=== Maintenance Status Monitor $(date) ==="
+            
+            # Check for nodes under maintenance (cordoned)
+            CORDONED_NODES=$(kubectl get nodes -o json | jq -r '.items[] | select(.spec.unschedulable == true) | .metadata.name')
+            if [ ! -z "$CORDONED_NODES" ]; then
+              echo "Nodes under maintenance:"
+              echo "$CORDONED_NODES"
+            else
+              echo "No nodes under maintenance"
+            fi
+            
+            # Check for ongoing jobs
+            RUNNING_JOBS=$(kubectl get jobs --all-namespaces --field-selector=status.active=1 --no-headers | wc -l)
+            if [ $RUNNING_JOBS -gt 0 ]; then
+              echo "Active maintenance jobs: $RUNNING_JOBS"
+              kubectl get jobs --all-namespaces --field-selector=status.active=1
+            fi
+            
+            # Check cluster health
+            NOT_READY_NODES=$(kubectl get nodes --no-headers | grep -v Ready | wc -l)
+            if [ $NOT_READY_NODES -gt 0 ]; then
+              echo "WARNING: $NOT_READY_NODES nodes not ready"
+            fi
+            
+            echo "---"
+            sleep 300  # Check every 5 minutes
+          done
+
+---
+# Emergency Maintenance Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: emergency-maintenance
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: maintenance-service-account
+      containers:
+      - name: emergency
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "EMERGENCY MAINTENANCE INITIATED"
+          echo "Timestamp: $(date)"
+          
+          # Create maintenance mode annotation on all nodes
+          kubectl get nodes -o name | while read node; do
+            kubectl annotate $node maintenance.kubernetes.io/emergency="true" --overwrite
+            echo "Marked $node for emergency maintenance"
+          done
+          
+          # Scale down non-critical deployments
+          kubectl get deployments --all-namespaces -o json | \
+          jq -r '.items[] | select(.metadata.labels.critical != "true") | "\(.metadata.namespace) \(.metadata.name)"' | \
+          while read namespace name; do
+            if [ ! -z "$namespace" ] && [ ! -z "$name" ]; then
+              echo "Scaling down non-critical deployment: $namespace/$name"
+              kubectl scale deployment $name -n $namespace --replicas=0
+            fi
+          done
+          
+          echo "Emergency maintenance preparation completed"
+          echo "Manual intervention may be required"
+      restartPolicy: Never

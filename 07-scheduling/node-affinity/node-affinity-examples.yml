@@ -1,0 +1,204 @@
+# Required Node Affinity - Architecture
+apiVersion: v1
+kind: Pod
+metadata:
+  name: arch-required-pod
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/arch
+            operator: In
+            values:
+            - amd64
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Preferred Node Affinity - Zone
+apiVersion: v1
+kind: Pod
+metadata:
+  name: zone-preferred-pod
+spec:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+          - key: zone
+            operator: In
+            values:
+            - us-west-1a
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Combined Required and Preferred
+apiVersion: v1
+kind: Pod
+metadata:
+  name: combined-affinity-pod
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/os
+            operator: In
+            values:
+            - linux
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 80
+        preference:
+          matchExpressions:
+          - key: disktype
+            operator: In
+            values:
+            - ssd
+      - weight: 20
+        preference:
+          matchExpressions:
+          - key: instance-type
+            operator: In
+            values:
+            - m5.large
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# GPU Workload Affinity
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-workload-pod
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: gpu
+            operator: Exists
+          - key: gpu-type
+            operator: In
+            values:
+            - nvidia-v100
+            - nvidia-t4
+  containers:
+  - name: gpu-app
+    image: tensorflow/tensorflow:latest-gpu
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+
+---
+# Anti-Affinity Pattern (avoid certain nodes)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: avoid-spot-instances
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node-type
+            operator: NotIn
+            values:
+            - spot
+          - key: preemptible
+            operator: DoesNotExist
+  containers:
+  - name: critical-app
+    image: nginx:1.20
+
+---
+# Multiple OR Conditions
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multiple-zones-pod
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: zone
+            operator: In
+            values:
+            - us-west-1a
+        - matchExpressions:
+          - key: zone
+            operator: In
+            values:
+            - us-west-1b
+        - matchExpressions:
+          - key: zone
+            operator: In
+            values:
+            - us-west-1c
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Deployment with Node Affinity
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compute-intensive-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: compute-app
+  template:
+    metadata:
+      labels:
+        app: compute-app
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: workload-type
+                operator: In
+                values:
+                - compute-intensive
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: cpu-cores
+                operator: Gt
+                values:
+                - "8"
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: memory-gb
+                operator: Gt
+                values:
+                - "16"
+      containers:
+      - name: compute-app
+        image: alpine:latest
+        command: ['sleep', '3600']
+        resources:
+          requests:
+            cpu: 2
+            memory: 4Gi
+          limits:
+            cpu: 4
+            memory: 8Gi

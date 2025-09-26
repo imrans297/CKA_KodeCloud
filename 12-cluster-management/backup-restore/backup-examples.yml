@@ -1,0 +1,356 @@
+# Backup CronJob for Cluster Resources
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cluster-resource-backup
+  namespace: kube-system
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: backup-service-account
+          containers:
+          - name: kubectl-backup
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_DIR="/backup/$DATE"
+              mkdir -p $BACKUP_DIR
+              
+              # Backup all resources
+              kubectl get all --all-namespaces -o yaml > $BACKUP_DIR/all-resources.yaml
+              kubectl get pv -o yaml > $BACKUP_DIR/persistent-volumes.yaml
+              kubectl get storageclass -o yaml > $BACKUP_DIR/storage-classes.yaml
+              kubectl get clusterroles -o yaml > $BACKUP_DIR/cluster-roles.yaml
+              kubectl get clusterrolebindings -o yaml > $BACKUP_DIR/cluster-role-bindings.yaml
+              kubectl get crd -o yaml > $BACKUP_DIR/custom-resources.yaml
+              
+              echo "Backup completed: $BACKUP_DIR"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure
+
+---
+# Service Account for Backup Job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-service-account
+  namespace: kube-system
+
+---
+# ClusterRole for Backup Operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-cluster-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding for Backup Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: backup-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: backup-service-account
+  namespace: kube-system
+
+---
+# PVC for Backup Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: kube-system
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+
+---
+# ETCD Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: kube-system
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostNetwork: true
+          containers:
+          - name: etcd-backup
+            image: k8s.gcr.io/etcd:3.5.0-0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              DATE=$(date +%Y%m%d_%H%M%S)
+              ETCDCTL_API=3 etcdctl snapshot save /backup/etcd-snapshot-$DATE.db \
+                --endpoints=https://127.0.0.1:2379 \
+                --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+                --cert=/etc/kubernetes/pki/etcd/server.crt \
+                --key=/etc/kubernetes/pki/etcd/server.key
+              
+              # Verify snapshot
+              ETCDCTL_API=3 etcdctl snapshot status /backup/etcd-snapshot-$DATE.db
+              
+              # Clean old backups (keep last 7 days)
+              find /backup -name "etcd-snapshot-*.db" -mtime +7 -delete
+              
+              echo "ETCD backup completed: etcd-snapshot-$DATE.db"
+            volumeMounts:
+            - name: etcd-certs
+              mountPath: /etc/kubernetes/pki/etcd
+              readOnly: true
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: etcd-certs
+            hostPath:
+              path: /etc/kubernetes/pki/etcd
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+
+---
+# Backup Verification Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backup-verification
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: backup-service-account
+      containers:
+      - name: verify-backup
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Verifying latest backup..."
+          
+          # Find latest backup directory
+          LATEST_BACKUP=$(ls -1t /backup | head -1)
+          echo "Latest backup: $LATEST_BACKUP"
+          
+          # Verify backup files exist
+          if [ -f "/backup/$LATEST_BACKUP/all-resources.yaml" ]; then
+            echo "✓ Resource backup found"
+          else
+            echo "✗ Resource backup missing"
+            exit 1
+          fi
+          
+          # Verify YAML syntax
+          kubectl apply --dry-run=client -f /backup/$LATEST_BACKUP/all-resources.yaml > /dev/null
+          if [ $? -eq 0 ]; then
+            echo "✓ Resource backup is valid"
+          else
+            echo "✗ Resource backup is invalid"
+            exit 1
+          fi
+          
+          echo "Backup verification completed successfully"
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-pvc
+      restartPolicy: Never
+
+---
+# Restore Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cluster-restore
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      serviceAccountName: restore-service-account
+      containers:
+      - name: cluster-restore
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          RESTORE_DATE=${RESTORE_DATE:-latest}
+          
+          if [ "$RESTORE_DATE" = "latest" ]; then
+            BACKUP_DIR="/backup/$(ls -1t /backup | head -1)"
+          else
+            BACKUP_DIR="/backup/$RESTORE_DATE"
+          fi
+          
+          echo "Restoring from: $BACKUP_DIR"
+          
+          # Restore resources (excluding some system resources)
+          kubectl apply -f $BACKUP_DIR/all-resources.yaml --force
+          kubectl apply -f $BACKUP_DIR/persistent-volumes.yaml --force
+          kubectl apply -f $BACKUP_DIR/storage-classes.yaml --force
+          
+          echo "Restore completed from: $BACKUP_DIR"
+        env:
+        - name: RESTORE_DATE
+          value: ""  # Set this to specific backup date or leave empty for latest
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-pvc
+      restartPolicy: Never
+
+---
+# Service Account for Restore Operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: restore-service-account
+  namespace: kube-system
+
+---
+# ClusterRole for Restore Operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: restore-cluster-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+# ClusterRoleBinding for Restore Service Account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: restore-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: restore-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: restore-service-account
+  namespace: kube-system
+
+---
+# Backup Monitoring ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-monitoring-script
+  namespace: kube-system
+data:
+  monitor.sh: |
+    #!/bin/bash
+    
+    # Check if backup completed successfully
+    BACKUP_DIR="/backup"
+    LATEST_BACKUP=$(ls -1t $BACKUP_DIR | head -1)
+    
+    if [ -z "$LATEST_BACKUP" ]; then
+      echo "ERROR: No backups found"
+      exit 1
+    fi
+    
+    # Check backup age (should be less than 25 hours)
+    BACKUP_TIME=$(stat -c %Y "$BACKUP_DIR/$LATEST_BACKUP")
+    CURRENT_TIME=$(date +%s)
+    AGE_HOURS=$(( (CURRENT_TIME - BACKUP_TIME) / 3600 ))
+    
+    if [ $AGE_HOURS -gt 25 ]; then
+      echo "WARNING: Latest backup is $AGE_HOURS hours old"
+      exit 1
+    fi
+    
+    # Check backup completeness
+    REQUIRED_FILES=("all-resources.yaml" "persistent-volumes.yaml" "storage-classes.yaml")
+    
+    for file in "${REQUIRED_FILES[@]}"; do
+      if [ ! -f "$BACKUP_DIR/$LATEST_BACKUP/$file" ]; then
+        echo "ERROR: Missing backup file: $file"
+        exit 1
+      fi
+    done
+    
+    echo "SUCCESS: Backup verification passed"
+    echo "Latest backup: $LATEST_BACKUP (${AGE_HOURS}h old)"
+
+---
+# Backup Monitoring CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-monitoring
+  namespace: kube-system
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup-monitor
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - /scripts/monitor.sh
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+            - name: monitoring-script
+              mountPath: /scripts
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          - name: monitoring-script
+            configMap:
+              name: backup-monitoring-script
+              defaultMode: 0755
+          restartPolicy: OnFailure

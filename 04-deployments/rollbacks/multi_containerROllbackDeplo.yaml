@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-container-rollback
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: multi-container
+  template:
+    metadata:
+      labels:
+        app: multi-container
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+      - name: sidecar
+        image: busybox:1.35
+        command: ['sh', '-c', 'while true; do echo "Sidecar running"; sleep 30; done']
+        env:
+        - name: SIDECAR_VERSION
+          value: "1.0"

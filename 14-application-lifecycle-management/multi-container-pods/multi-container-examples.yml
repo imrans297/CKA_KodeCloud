@@ -1,0 +1,452 @@
+# Sidecar Pattern - Web Server with Log Processor
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-logging
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: nginx-logs
+      mountPath: /var/log/nginx
+  - name: log-processor
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        if [ -f /logs/access.log ]; then
+          echo "Processing access logs..."
+          tail -n 10 /logs/access.log | grep -E "(GET|POST)" | wc -l > /logs/request_count.txt
+        fi
+        sleep 30
+      done
+    volumeMounts:
+    - name: nginx-logs
+      mountPath: /logs
+  volumes:
+  - name: nginx-logs
+    emptyDir: {}
+
+---
+# Ambassador Pattern - Database Proxy
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ambassador-proxy
+spec:
+  containers:
+  - name: main-app
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        echo "Connecting to database via localhost:5432"
+        nc -z localhost 5432 && echo "Database connection successful" || echo "Database connection failed"
+        sleep 10
+      done
+  - name: database-proxy
+    image: haproxy:2.4
+    ports:
+    - containerPort: 5432
+    volumeMounts:
+    - name: haproxy-config
+      mountPath: /usr/local/etc/haproxy
+  volumes:
+  - name: haproxy-config
+    configMap:
+      name: haproxy-config
+
+---
+# Adapter Pattern - Metrics Conversion
+apiVersion: v1
+kind: Pod
+metadata:
+  name: adapter-metrics
+spec:
+  containers:
+  - name: legacy-app
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        echo "cpu_usage:$(( RANDOM % 100 ))" > /shared/legacy-metrics.txt
+        echo "memory_usage:$(( RANDOM % 100 ))" >> /shared/legacy-metrics.txt
+        echo "disk_usage:$(( RANDOM % 100 ))" >> /shared/legacy-metrics.txt
+        sleep 15
+      done
+    volumeMounts:
+    - name: shared-data
+      mountPath: /shared
+  - name: prometheus-adapter
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        if [ -f /input/legacy-metrics.txt ]; then
+          echo "# HELP cpu_usage CPU usage percentage"
+          echo "# TYPE cpu_usage gauge"
+          grep "cpu_usage" /input/legacy-metrics.txt | sed 's/cpu_usage:/cpu_usage /'
+          echo "# HELP memory_usage Memory usage percentage"
+          echo "# TYPE memory_usage gauge"
+          grep "memory_usage" /input/legacy-metrics.txt | sed 's/memory_usage:/memory_usage /'
+        fi > /output/metrics.prom
+        sleep 10
+      done
+    volumeMounts:
+    - name: shared-data
+      mountPath: /input
+    - name: prometheus-metrics
+      mountPath: /output
+    ports:
+    - containerPort: 9090
+  volumes:
+  - name: shared-data
+    emptyDir: {}
+  - name: prometheus-metrics
+    emptyDir: {}
+
+---
+# Multi-Container with Shared Storage
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shared-storage-demo
+spec:
+  containers:
+  - name: writer
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      counter=1
+      while true; do
+        echo "Message $counter from writer at $(date)" >> /shared/messages.log
+        counter=$((counter + 1))
+        sleep 5
+      done
+    volumeMounts:
+    - name: shared-volume
+      mountPath: /shared
+  - name: reader
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        if [ -f /shared/messages.log ]; then
+          echo "=== Latest messages ==="
+          tail -n 5 /shared/messages.log
+          echo "======================="
+        fi
+        sleep 10
+      done
+    volumeMounts:
+    - name: shared-volume
+      mountPath: /shared
+  - name: processor
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        if [ -f /shared/messages.log ]; then
+          line_count=$(wc -l < /shared/messages.log)
+          echo "Total messages processed: $line_count" > /shared/stats.txt
+        fi
+        sleep 15
+      done
+    volumeMounts:
+    - name: shared-volume
+      mountPath: /shared
+  volumes:
+  - name: shared-volume
+    emptyDir: {}
+
+---
+# Web Application with Monitoring Sidecar
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp-with-monitoring
+spec:
+  containers:
+  - name: webapp
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  - name: monitoring-agent
+    image: prom/node-exporter:latest
+    ports:
+    - containerPort: 9100
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  - name: log-shipper
+    image: fluent/fluentd:v1.14
+    env:
+    - name: FLUENTD_CONF
+      value: "fluent.conf"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+---
+# Database with Backup Sidecar
+apiVersion: v1
+kind: Pod
+metadata:
+  name: postgres-with-backup
+spec:
+  containers:
+  - name: postgres
+    image: postgres:13
+    env:
+    - name: POSTGRES_DB
+      value: "myapp"
+    - name: POSTGRES_USER
+      value: "postgres"
+    - name: POSTGRES_PASSWORD
+      value: "password"
+    ports:
+    - containerPort: 5432
+    volumeMounts:
+    - name: postgres-data
+      mountPath: /var/lib/postgresql/data
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+  - name: backup-agent
+    image: postgres:13
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        echo "Starting backup at $(date)"
+        sleep 300  # Wait 5 minutes before first backup
+        PGPASSWORD=password pg_dump -h localhost -U postgres myapp > /backups/backup-$(date +%Y%m%d-%H%M%S).sql
+        echo "Backup completed at $(date)"
+        
+        # Keep only last 5 backups
+        ls -t /backups/backup-*.sql | tail -n +6 | xargs -r rm
+        
+        sleep 3600  # Backup every hour
+      done
+    volumeMounts:
+    - name: backup-storage
+      mountPath: /backups
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+  volumes:
+  - name: postgres-data
+    emptyDir: {}
+  - name: backup-storage
+    emptyDir: {}
+
+---
+# Application with Security Scanner Sidecar
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-security-scanner
+spec:
+  containers:
+  - name: main-app
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: app-logs
+      mountPath: /var/log/nginx
+  - name: security-scanner
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        echo "Running security scan at $(date)"
+        
+        # Simulate security scanning
+        if [ -f /logs/access.log ]; then
+          # Check for suspicious patterns
+          suspicious_count=$(grep -c "admin\|root\|passwd" /logs/access.log 2>/dev/null || echo "0")
+          echo "Suspicious requests found: $suspicious_count" > /security/scan-results.txt
+          
+          if [ "$suspicious_count" -gt 0 ]; then
+            echo "ALERT: Suspicious activity detected!" >> /security/alerts.log
+          fi
+        fi
+        
+        sleep 60  # Scan every minute
+      done
+    volumeMounts:
+    - name: app-logs
+      mountPath: /logs
+    - name: security-data
+      mountPath: /security
+  volumes:
+  - name: app-logs
+    emptyDir: {}
+  - name: security-data
+    emptyDir: {}
+
+---
+# Multi-Container with Init Container
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-container-with-init
+spec:
+  initContainers:
+  - name: setup-shared-data
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Setting up shared configuration..."
+      echo "app_name=multi-container-demo" > /shared/config.env
+      echo "version=1.0.0" >> /shared/config.env
+      echo "debug=true" >> /shared/config.env
+      echo "Setup complete!"
+    volumeMounts:
+    - name: shared-config
+      mountPath: /shared
+  containers:
+  - name: web-server
+    image: nginx:1.20
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: shared-config
+      mountPath: /etc/app
+  - name: config-watcher
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        echo "Current configuration:"
+        cat /config/config.env
+        echo "---"
+        sleep 30
+      done
+    volumeMounts:
+    - name: shared-config
+      mountPath: /config
+  - name: health-checker
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      while true; do
+        if nc -z localhost 80; then
+          echo "$(date): Web server is healthy" >> /health/status.log
+        else
+          echo "$(date): Web server is down!" >> /health/status.log
+        fi
+        sleep 15
+      done
+    volumeMounts:
+    - name: health-data
+      mountPath: /health
+  volumes:
+  - name: shared-config
+    emptyDir: {}
+  - name: health-data
+    emptyDir: {}
+
+---
+# ConfigMap for HAProxy
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+data:
+  haproxy.cfg: |
+    global
+        daemon
+        maxconn 256
+
+    defaults
+        mode tcp
+        timeout connect 5000ms
+        timeout client 50000ms
+        timeout server 50000ms
+
+    frontend database_frontend
+        bind *:5432
+        default_backend database_servers
+
+    backend database_servers
+        balance roundrobin
+        server db1 external-db-1:5432 check
+        server db2 external-db-2:5432 check
+
+---
+# Deployment with Multi-Container Pods
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-container-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: multi-container-app
+  template:
+    metadata:
+      labels:
+        app: multi-container-app
+    spec:
+      containers:
+      - name: main-app
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      - name: sidecar-logger
+        image: busybox:1.35
+        command: ['sh', '-c', 'while true; do echo "$(date): Sidecar is running"; sleep 30; done']
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

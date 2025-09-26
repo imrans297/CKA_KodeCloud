@@ -1,0 +1,214 @@
+# Pod with Basic Toleration
+apiVersion: v1
+kind: Pod
+metadata:
+  name: basic-toleration-pod
+spec:
+  tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "gpu"
+    effect: "NoSchedule"
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Pod with Exists Toleration
+apiVersion: v1
+kind: Pod
+metadata:
+  name: exists-toleration-pod
+spec:
+  tolerations:
+  - key: "maintenance"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Pod with NoExecute Toleration and Timeout
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noexecute-toleration-pod
+spec:
+  tolerations:
+  - key: "maintenance"
+    operator: "Equal"
+    value: "true"
+    effect: "NoExecute"
+    tolerationSeconds: 3600  # Tolerate for 1 hour
+  containers:
+  - name: app
+    image: nginx:1.20
+
+---
+# Pod Tolerating All Taints
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tolerate-all-pod
+spec:
+  tolerations:
+  - operator: "Exists"  # Tolerates all taints
+  containers:
+  - name: system-app
+    image: busybox:1.35
+    command: ['sleep', '3600']
+
+---
+# GPU Workload with Multiple Tolerations
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-workload-pod
+spec:
+  tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "gpu"
+    effect: "NoSchedule"
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+  - key: "high-performance"
+    operator: "Equal"
+    value: "true"
+    effect: "PreferNoSchedule"
+  containers:
+  - name: gpu-app
+    image: tensorflow/tensorflow:latest-gpu
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+
+---
+# Database Workload on Dedicated Nodes
+apiVersion: v1
+kind: Pod
+metadata:
+  name: database-pod
+spec:
+  tolerations:
+  - key: "workload"
+    operator: "Equal"
+    value: "database"
+    effect: "NoSchedule"
+  - key: "storage"
+    operator: "Equal"
+    value: "ssd"
+    effect: "NoSchedule"
+  containers:
+  - name: postgres
+    image: postgres:13
+    env:
+    - name: POSTGRES_PASSWORD
+      value: "password"
+
+---
+# Spot Instance Tolerant Workload
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spot-tolerant-pod
+spec:
+  tolerations:
+  - key: "spot-instance"
+    operator: "Equal"
+    value: "true"
+    effect: "PreferNoSchedule"
+  - key: "preemptible"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: batch-job
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Running batch job" && sleep 3600']
+
+---
+# Deployment with Tolerations
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dedicated-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dedicated-app
+  template:
+    metadata:
+      labels:
+        app: dedicated-app
+    spec:
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "compute"
+        effect: "NoSchedule"
+      - key: "high-cpu"
+        operator: "Exists"
+        effect: "PreferNoSchedule"
+      containers:
+      - name: compute-app
+        image: alpine:latest
+        command: ['sleep', '3600']
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 2Gi
+
+---
+# System Pod with Master Toleration
+apiVersion: v1
+kind: Pod
+metadata:
+  name: system-pod
+spec:
+  tolerations:
+  - key: "node-role.kubernetes.io/master"
+    operator: "Exists"
+    effect: "NoSchedule"
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: system-app
+    image: busybox:1.35
+    command: ['sleep', '3600']
+
+---
+# Pod with Combined Affinity and Tolerations
+apiVersion: v1
+kind: Pod
+metadata:
+  name: combined-scheduling-pod
+spec:
+  tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "ml"
+    effect: "NoSchedule"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: "dedicated"
+            operator: In
+            values: ["ml"]
+          - key: "gpu-type"
+            operator: In
+            values: ["nvidia-v100", "nvidia-t4"]
+  containers:
+  - name: ml-app
+    image: tensorflow/tensorflow:latest-gpu
+    resources:
+      limits:
+        nvidia.com/gpu: 1

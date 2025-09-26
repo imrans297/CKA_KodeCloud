@@ -1,0 +1,274 @@
+# ClusterIP Service (Default)
+apiVersion: v1
+kind: Service
+metadata:
+  name: clusterip-service
+spec:
+  type: ClusterIP
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+
+---
+# NodePort Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodeport-service
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30080
+    protocol: TCP
+
+---
+# LoadBalancer Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: loadbalancer-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+
+---
+# ExternalName Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-api-service
+spec:
+  type: ExternalName
+  externalName: api.external.com
+  ports:
+  - port: 80
+
+---
+# Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: headless-service
+spec:
+  clusterIP: None
+  selector:
+    app: database
+  ports:
+  - port: 5432
+    targetPort: 5432
+
+---
+# Multi-Port Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-port-service
+spec:
+  selector:
+    app: webapp
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  - name: https
+    port: 443
+    targetPort: 8443
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+
+---
+# Service with Session Affinity
+apiVersion: v1
+kind: Service
+metadata:
+  name: sticky-service
+spec:
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  selector:
+    app: stateful-app
+  ports:
+  - port: 80
+    targetPort: 8080
+
+---
+# Service without Selector (External Endpoints)
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-database-service
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+
+---
+# Manual Endpoints for External Service
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: external-database-service
+subsets:
+- addresses:
+  - ip: 192.168.1.100
+  - ip: 192.168.1.101
+  ports:
+  - port: 5432
+
+---
+# Internal Load Balancer Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: internal-lb-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: internal-app
+  ports:
+  - port: 80
+    targetPort: 8080
+
+---
+# Service with Custom Health Check
+apiVersion: v1
+kind: Service
+metadata:
+  name: health-check-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 8080
+
+---
+# Sample Deployment for Services
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Database Deployment for Headless Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: database-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "password"
+
+---
+# API Deployment with Multiple Ports
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+      - name: api
+        image: httpd:2.4
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8443
+          name: https
+        - containerPort: 9090
+          name: metrics
+
+---
+# Service Monitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: webapp-monitor
+spec:
+  selector:
+    matchLabels:
+      app: webapp
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+
+---
+# Test Pod for Service Connectivity
+apiVersion: v1
+kind: Pod
+metadata:
+  name: service-test-pod
+spec:
+  containers:
+  - name: test
+    image: busybox:1.35
+    command: ['sleep', '3600']
+  restartPolicy: Never

@@ -1,0 +1,127 @@
+# Deployment with Revision History
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollback-demo
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5  # Keep 5 previous versions
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rollback-demo
+  template:
+    metadata:
+      labels:
+        app: rollback-demo
+        version: "v1.0"
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.19  # Initial version
+        ports:
+        - containerPort: 80
+        env:
+        - name: VERSION
+          value: "1.0"
+        - name: RELEASE_DATE
+          value: "2023-01-01"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+---
+# Service for Testing Rollbacks
+apiVersion: v1
+kind: Service
+metadata:
+  name: rollback-demo-service
+spec:
+  selector:
+    app: rollback-demo
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+
+---
+# Deployment with Problematic Update (for rollback practice)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: problematic-deployment
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: problematic-app
+  template:
+    metadata:
+      labels:
+        app: problematic-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:nonexistent  # This will fail
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /health  # This endpoint doesn't exist
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
+
+---
+# Multi-Container Deployment for Complex Rollback Scenarios
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-container-rollback
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: multi-container
+  template:
+    metadata:
+      labels:
+        app: multi-container
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+      - name: sidecar
+        image: busybox:1.35
+        command: ['sh', '-c', 'while true; do echo "Sidecar running"; sleep 30; done']
+        env:
+        - name: SIDECAR_VERSION
+          value: "1.0"

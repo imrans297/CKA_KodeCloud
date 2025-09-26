@@ -1,0 +1,399 @@
+# Basic Init Container Example
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-demo
+spec:
+  initContainers:
+  - name: init-service
+    image: busybox:1.35
+    command: ['sh', '-c', 'until nslookup myservice.default.svc.cluster.local; do echo waiting for myservice; sleep 2; done']
+  containers:
+  - name: myapp-container
+    image: nginx
+    ports:
+    - containerPort: 80
+
+---
+# Multi Init Container Example
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-init-demo
+spec:
+  initContainers:
+  - name: init-db
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Initializing database..." && sleep 10']
+  - name: init-cache
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Setting up cache..." && sleep 5']
+  - name: init-config
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Loading configuration..." && sleep 3']
+  containers:
+  - name: main-app
+    image: nginx
+    ports:
+    - containerPort: 80
+
+---
+# Init Container with Volume Sharing
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-volume-demo
+spec:
+  initContainers:
+  - name: init-setup
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "<h1>Welcome to My App</h1>" > /shared/index.html
+      echo "<p>Initialized at $(date)</p>" >> /shared/index.html
+      echo "Setup complete!"
+    volumeMounts:
+    - name: shared-data
+      mountPath: /shared
+  containers:
+  - name: web-server
+    image: nginx
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: shared-data
+      mountPath: /usr/share/nginx/html
+  volumes:
+  - name: shared-data
+    emptyDir: {}
+
+---
+# Init Container Waiting for Service
+apiVersion: v1
+kind: Pod
+metadata:
+  name: service-dependency-demo
+spec:
+  initContainers:
+  - name: wait-for-database
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Waiting for database service..."
+      until nc -z postgres-service 5432; do
+        echo "Database not ready, waiting..."
+        sleep 2
+      done
+      echo "Database is ready!"
+  - name: wait-for-redis
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Waiting for Redis service..."
+      until nc -z redis-service 6379; do
+        echo "Redis not ready, waiting..."
+        sleep 2
+      done
+      echo "Redis is ready!"
+  containers:
+  - name: webapp
+    image: nginx
+    ports:
+    - containerPort: 80
+
+---
+# Init Container for Configuration Download
+apiVersion: v1
+kind: Pod
+metadata:
+  name: config-download-demo
+spec:
+  initContainers:
+  - name: download-config
+    image: curlimages/curl:latest
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Downloading configuration..."
+      curl -o /config/app.conf https://httpbin.org/json || echo '{"app": "demo"}' > /config/app.conf
+      echo "Configuration downloaded successfully"
+      cat /config/app.conf
+    volumeMounts:
+    - name: config-volume
+      mountPath: /config
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: config-volume
+      mountPath: /etc/app
+  volumes:
+  - name: config-volume
+    emptyDir: {}
+
+---
+# Init Container with Resource Limits
+apiVersion: v1
+kind: Pod
+metadata:
+  name: resource-limited-init
+spec:
+  initContainers:
+  - name: resource-init
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Init with resource limits" && sleep 5']
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  containers:
+  - name: app
+    image: nginx
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+---
+# Deployment with Init Containers
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-with-init
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webapp-init
+  template:
+    metadata:
+      labels:
+        app: webapp-init
+    spec:
+      initContainers:
+      - name: check-dependencies
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Checking dependencies..."
+          # Simulate dependency check
+          sleep 5
+          echo "Dependencies verified!"
+      - name: setup-data
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Setting up initial data..."
+          mkdir -p /data/logs
+          echo "Application started at $(date)" > /data/logs/startup.log
+          echo "Data setup complete!"
+        volumeMounts:
+        - name: app-data
+          mountPath: /data
+      containers:
+      - name: webapp
+        image: nginx
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: app-data
+          mountPath: /var/log/app
+      volumes:
+      - name: app-data
+        emptyDir: {}
+
+---
+# Init Container for Database Migration
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-migration-demo
+spec:
+  initContainers:
+  - name: db-migrate
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Running database migrations..."
+      # Simulate database migration
+      echo "CREATE TABLE users (id INT, name VARCHAR(50));" > /migrations/001_create_users.sql
+      echo "INSERT INTO users VALUES (1, 'Admin');" > /migrations/002_insert_admin.sql
+      echo "Migrations prepared!"
+      sleep 3
+      echo "Migration complete!"
+    volumeMounts:
+    - name: migration-scripts
+      mountPath: /migrations
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: migration-scripts
+      mountPath: /app/migrations
+  volumes:
+  - name: migration-scripts
+    emptyDir: {}
+
+---
+# Init Container with Security Context
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-init-demo
+spec:
+  initContainers:
+  - name: secure-init
+    image: busybox:1.35
+    command: ['sh', '-c', 'echo "Secure initialization" && id && sleep 3']
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      readOnlyRootFilesystem: true
+    volumeMounts:
+    - name: tmp-volume
+      mountPath: /tmp
+  containers:
+  - name: app
+    image: nginx
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1001
+  volumes:
+  - name: tmp-volume
+    emptyDir: {}
+
+---
+# Init Container for File Processing
+apiVersion: v1
+kind: Pod
+metadata:
+  name: file-processing-demo
+spec:
+  initContainers:
+  - name: file-processor
+    image: busybox:1.35
+    command: ['sh', '-c']
+    args:
+    - |
+      echo "Processing files..."
+      
+      # Create sample data
+      echo "user1,admin,active" > /data/users.csv
+      echo "user2,user,inactive" >> /data/users.csv
+      echo "user3,moderator,active" >> /data/users.csv
+      
+      # Process the data
+      echo "Processing CSV data..."
+      awk -F',' '$3=="active" {print $1 ": " $2}' /data/users.csv > /data/active_users.txt
+      
+      echo "File processing complete!"
+      echo "Active users:"
+      cat /data/active_users.txt
+    volumeMounts:
+    - name: data-volume
+      mountPath: /data
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: data-volume
+      mountPath: /usr/share/nginx/html/data
+  volumes:
+  - name: data-volume
+    emptyDir: {}
+
+---
+# Services for Testing Init Container Dependencies
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myservice
+spec:
+  selector:
+    app: myapp
+  ports:
+  - port: 80
+    targetPort: 80
+
+---
+# Sample Backend Services for Testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        ports:
+        - containerPort: 5432
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:6
+        ports:
+        - containerPort: 6379

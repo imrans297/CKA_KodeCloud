@@ -1,0 +1,124 @@
+# Problematic Pod Examples for Troubleshooting Practice
+
+# Scenario 1: ImagePullBackOff
+apiVersion: v1
+kind: Pod
+metadata:
+  name: image-pull-error
+spec:
+  containers:
+  - name: app
+    image: nonexistent/image:latest
+    # This will fail with ImagePullBackOff
+
+---
+# Scenario 2: CrashLoopBackOff
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crash-loop-pod
+spec:
+  containers:
+  - name: app
+    image: busybox
+    command: ['sh', '-c', 'echo "Starting..." && exit 1']
+    # This will crash immediately and restart
+
+---
+# Scenario 3: Resource Constraints
+apiVersion: v1
+kind: Pod
+metadata:
+  name: resource-constrained
+spec:
+  containers:
+  - name: app
+    image: nginx
+    resources:
+      requests:
+        memory: "10Gi"  # Unrealistic memory request
+        cpu: "8"        # High CPU request
+      limits:
+        memory: "10Gi"
+        cpu: "8"
+
+---
+# Scenario 4: Failed Liveness Probe
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-failure
+spec:
+  containers:
+  - name: app
+    image: nginx
+    livenessProbe:
+      httpGet:
+        path: /nonexistent
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 2
+
+---
+# Scenario 5: Failed Readiness Probe
+apiVersion: v1
+kind: Pod
+metadata:
+  name: readiness-failure
+spec:
+  containers:
+  - name: app
+    image: nginx
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 9999  # Wrong port
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+---
+# Scenario 6: Init Container Failure
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-failure
+spec:
+  initContainers:
+  - name: init-fail
+    image: busybox
+    command: ['sh', '-c', 'exit 1']  # Fails immediately
+  containers:
+  - name: main
+    image: nginx
+
+---
+# Scenario 7: Volume Mount Issues
+apiVersion: v1
+kind: Pod
+metadata:
+  name: volume-mount-error
+spec:
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: config
+      mountPath: /etc/config
+  volumes:
+  - name: config
+    configMap:
+      name: nonexistent-configmap  # ConfigMap doesn't exist
+
+---
+# Working Debug Pod for Testing
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-toolkit
+spec:
+  containers:
+  - name: debug
+    image: busybox:1.35
+    command: ['sleep', '3600']
+    # Use this pod to test connectivity and debug issues

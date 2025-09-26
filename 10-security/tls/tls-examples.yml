@@ -1,0 +1,323 @@
+# TLS Secret for Ingress
+apiVersion: v1
+kind: Secret
+metadata:
+  name: webapp-tls-secret
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTi... # Base64 encoded certificate
+  tls.key: LS0tLS1CRUdJTi... # Base64 encoded private key
+
+---
+# Ingress with TLS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-webapp-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - webapp.example.com
+    - api.webapp.example.com
+    secretName: webapp-tls-secret
+  rules:
+  - host: webapp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: webapp-service
+            port:
+              number: 80
+  - host: api.webapp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 8080
+
+---
+# Certificate Signing Request
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: developer-csr
+spec:
+  request: LS0tLS1CRUdJTi... # Base64 encoded CSR
+  signerName: kubernetes.io/kube-apiserver-client
+  expirationSeconds: 86400  # 24 hours
+  usages:
+  - client auth
+
+---
+# Service with TLS
+apiVersion: v1
+kind: Service
+metadata:
+  name: secure-api-service
+spec:
+  selector:
+    app: secure-api
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8443
+  - name: http
+    port: 80
+    targetPort: 8080
+
+---
+# Pod with TLS Certificates
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tls-enabled-pod
+spec:
+  containers:
+  - name: app
+    image: nginx:1.20
+    ports:
+    - containerPort: 443
+    - containerPort: 80
+    volumeMounts:
+    - name: tls-certs
+      mountPath: /etc/ssl/certs
+      readOnly: true
+    - name: nginx-config
+      mountPath: /etc/nginx/conf.d
+  volumes:
+  - name: tls-certs
+    secret:
+      secretName: webapp-tls-secret
+  - name: nginx-config
+    configMap:
+      name: nginx-tls-config
+
+---
+# NGINX ConfigMap for TLS
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-tls-config
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name webapp.example.com;
+        return 301 https://$server_name$request_uri;
+    }
+    
+    server {
+        listen 443 ssl;
+        server_name webapp.example.com;
+        
+        ssl_certificate /etc/ssl/certs/tls.crt;
+        ssl_certificate_key /etc/ssl/certs/tls.key;
+        
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
+        ssl_prefer_server_ciphers off;
+        
+        location / {
+            root /usr/share/nginx/html;
+            index index.html index.htm;
+        }
+    }
+
+---
+# Deployment with TLS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-web-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: secure-web
+  template:
+    metadata:
+      labels:
+        app: secure-web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.20
+        ports:
+        - containerPort: 443
+        - containerPort: 80
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: webapp-tls-secret
+      - name: nginx-config
+        configMap:
+          name: nginx-tls-config
+
+---
+# Multi-Domain TLS Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: multi-domain-tls
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTi... # SAN certificate for multiple domains
+  tls.key: LS0tLS1CRUdJTi... # Private key
+
+---
+# Ingress with Multiple TLS Certificates
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: multi-tls-ingress
+spec:
+  tls:
+  - hosts:
+    - app1.example.com
+    secretName: app1-tls-secret
+  - hosts:
+    - app2.example.com
+    secretName: app2-tls-secret
+  - hosts:
+    - "*.api.example.com"
+    secretName: wildcard-api-tls-secret
+  rules:
+  - host: app1.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app1-service
+            port:
+              number: 80
+  - host: app2.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app2-service
+            port:
+              number: 80
+  - host: v1.api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-v1-service
+            port:
+              number: 8080
+
+---
+# Pod with Client Certificate Authentication
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-cert-pod
+spec:
+  containers:
+  - name: client
+    image: curlimages/curl:latest
+    command: ['sleep', '3600']
+    volumeMounts:
+    - name: client-certs
+      mountPath: /etc/ssl/client
+      readOnly: true
+  volumes:
+  - name: client-certs
+    secret:
+      secretName: client-cert-secret
+
+---
+# Client Certificate Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-cert-secret
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTi... # Client certificate
+  tls.key: LS0tLS1CRUdJTi... # Client private key
+
+---
+# Service Account with Certificate
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cert-manager-sa
+
+---
+# Role for Certificate Management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cert-manager-role
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["certificatesigningrequests"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding for Certificate Management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cert-manager-binding
+subjects:
+- kind: ServiceAccount
+  name: cert-manager-sa
+roleRef:
+  kind: Role
+  name: cert-manager-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Pod for Certificate Management
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cert-manager-pod
+spec:
+  serviceAccountName: cert-manager-sa
+  containers:
+  - name: cert-manager
+    image: alpine:latest
+    command: ['sleep', '3600']
+    volumeMounts:
+    - name: ca-certs
+      mountPath: /etc/ssl/ca
+      readOnly: true
+  volumes:
+  - name: ca-certs
+    secret:
+      secretName: ca-cert-secret

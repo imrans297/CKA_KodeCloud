@@ -1,0 +1,84 @@
+# Manual Scheduling - nodeName
+apiVersion: v1
+kind: Pod
+metadata:
+  name: manual-scheduled-pod
+spec:
+  nodeName: worker-node-1
+  containers:
+  - name: nginx
+    image: nginx
+
+---
+# Node Selector
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-selector-pod
+spec:
+  nodeSelector:
+    disktype: ssd
+  containers:
+  - name: nginx
+    image: nginx
+
+---
+# Node Affinity - Required
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-affinity-required
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/arch
+            operator: In
+            values:
+            - amd64
+  containers:
+  - name: nginx
+    image: nginx
+
+---
+# Node Affinity - Preferred
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-affinity-preferred
+spec:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+          - key: zone
+            operator: In
+            values:
+            - us-west-1a
+  containers:
+  - name: nginx
+    image: nginx
+
+---
+# Taints and Tolerations
+apiVersion: v1
+kind: Pod
+metadata:
+  name: toleration-pod
+spec:
+  tolerations:
+  - key: "key1"
+    operator: "Equal"
+    value: "value1"
+    effect: "NoSchedule"
+  - key: "key2"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 3600
+  containers:
+  - name: nginx
+    image: nginx

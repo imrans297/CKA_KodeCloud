@@ -1,0 +1,300 @@
+# Basic Log Collection DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-collector
+  labels:
+    app: log-collector
+spec:
+  selector:
+    matchLabels:
+      app: log-collector
+  template:
+    metadata:
+      labels:
+        app: log-collector
+    spec:
+      containers:
+      - name: fluentd
+        image: fluentd:v1.14
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+
+---
+# Monitoring Agent DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  labels:
+    app: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: node-exporter
+        image: prom/node-exporter:latest
+        args:
+        - --path.procfs=/host/proc
+        - --path.sysfs=/host/sys
+        - --collector.filesystem.ignored-mount-points
+        - ^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)
+        ports:
+        - containerPort: 9100
+          hostPort: 9100
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+
+---
+# Network Plugin DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: network-plugin
+  labels:
+    app: network-plugin
+spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: network-plugin
+  template:
+    metadata:
+      labels:
+        app: network-plugin
+    spec:
+      hostNetwork: true
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      containers:
+      - name: calico-node
+        image: calico/node:v3.24.0
+        env:
+        - name: CALICO_NETWORKING_BACKEND
+          value: "bird"
+        - name: CLUSTER_TYPE
+          value: "k8s,bgp"
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 150m
+            memory: 64Mi
+          limits:
+            cpu: 300m
+            memory: 128Mi
+
+---
+# Security Agent DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: security-agent
+  labels:
+    app: security-agent
+spec:
+  selector:
+    matchLabels:
+      app: security-agent
+  template:
+    metadata:
+      labels:
+        app: security-agent
+    spec:
+      serviceAccountName: security-agent-sa
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: security-agent
+        image: security/agent:latest
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        volumeMounts:
+        - name: host-root
+          mountPath: /host
+          readOnly: true
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+          readOnly: true
+      volumes:
+      - name: host-root
+        hostPath:
+          path: /
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+
+---
+# Storage Daemon DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: storage-daemon
+  labels:
+    app: storage-daemon
+spec:
+  selector:
+    matchLabels:
+      app: storage-daemon
+  template:
+    metadata:
+      labels:
+        app: storage-daemon
+    spec:
+      nodeSelector:
+        storage: "enabled"
+      containers:
+      - name: ceph-osd
+        image: ceph/ceph:v15.2.0
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: devices
+          mountPath: /dev
+        - name: ceph-data
+          mountPath: /var/lib/ceph
+      volumes:
+      - name: devices
+        hostPath:
+          path: /dev
+      - name: ceph-data
+        hostPath:
+          path: /var/lib/ceph
+
+---
+# GPU Monitoring DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-monitor
+  labels:
+    app: gpu-monitor
+spec:
+  selector:
+    matchLabels:
+      app: gpu-monitor
+  template:
+    metadata:
+      labels:
+        app: gpu-monitor
+    spec:
+      nodeSelector:
+        accelerator: nvidia-tesla-v100
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: nvidia-dcgm-exporter
+        image: nvidia/dcgm-exporter:latest
+        ports:
+        - containerPort: 9400
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          capabilities:
+            add: ["SYS_ADMIN"]
+
+---
+# ServiceAccount for Security Agent
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: security-agent-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: security-agent-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: security-agent-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: security-agent-role
+subjects:
+- kind: ServiceAccount
+  name: security-agent-sa
+  namespace: default

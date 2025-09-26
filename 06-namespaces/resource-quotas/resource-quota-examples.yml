@@ -1,0 +1,182 @@
+# Development Environment Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dev-compute-quota
+  namespace: development
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    requests.storage: 50Gi
+    pods: "15"
+    services: "10"
+    secrets: "15"
+    configmaps: "15"
+    persistentvolumeclaims: "5"
+
+---
+# Production Environment Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: prod-compute-quota
+  namespace: production
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    requests.storage: 500Gi
+    pods: "50"
+    services: "20"
+    secrets: "30"
+    configmaps: "30"
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "5"
+    services.nodeports: "10"
+
+---
+# Object Count Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: object-count-quota
+  namespace: testing
+spec:
+  hard:
+    pods: "10"
+    replicationcontrollers: "5"
+    resourcequotas: "1"
+    secrets: "10"
+    configmaps: "10"
+    persistentvolumeclaims: "4"
+    services: "5"
+    services.loadbalancers: "2"
+    services.nodeports: "3"
+
+---
+# Storage-Specific Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: storage-quota
+  namespace: data-team
+spec:
+  hard:
+    requests.storage: 100Gi
+    persistentvolumeclaims: "10"
+    # Storage class specific quotas
+    gold.storageclass.storage.k8s.io/requests.storage: 20Gi
+    silver.storageclass.storage.k8s.io/requests.storage: 50Gi
+    bronze.storageclass.storage.k8s.io/requests.storage: 30Gi
+
+---
+# BestEffort Pods Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: besteffort-quota
+  namespace: batch-jobs
+spec:
+  scopes: ["BestEffort"]
+  hard:
+    pods: "5"
+
+---
+# NotBestEffort Pods Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: guaranteed-quota
+  namespace: batch-jobs
+spec:
+  scopes: ["NotBestEffort"]
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+
+---
+# Priority Class Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: high-priority-quota
+  namespace: critical-apps
+spec:
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values: ["high-priority", "system-critical"]
+  hard:
+    requests.cpu: "10"
+    requests.memory: 20Gi
+    pods: "20"
+
+---
+# Comprehensive Namespace Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: comprehensive-quota
+  namespace: full-stack-team
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "6"
+    requests.memory: 12Gi
+    limits.cpu: "12"
+    limits.memory: 24Gi
+    
+    # Storage resources
+    requests.storage: 200Gi
+    
+    # Object counts
+    pods: "25"
+    replicationcontrollers: "10"
+    resourcequotas: "1"
+    secrets: "20"
+    configmaps: "20"
+    persistentvolumeclaims: "10"
+    
+    # Service limits
+    services: "15"
+    services.loadbalancers: "3"
+    services.nodeports: "8"
+    
+    # Extended resources (if available)
+    requests.nvidia.com/gpu: "2"
+
+---
+# LimitRange to work with ResourceQuota
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-limits
+  namespace: development
+spec:
+  limits:
+  - default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    type: Container
+  - max:
+      storage: "10Gi"
+    min:
+      storage: "1Gi"
+    type: PersistentVolumeClaim

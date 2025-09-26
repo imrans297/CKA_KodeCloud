@@ -1,0 +1,113 @@
+# Conservative Rolling Update Strategy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conservative-deployment
+spec:
+  replicas: 6
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # No downtime
+      maxSurge: 1         # One extra pod at a time
+  selector:
+    matchLabels:
+      app: conservative-app
+  template:
+    metadata:
+      labels:
+        app: conservative-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+---
+# Aggressive Rolling Update Strategy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggressive-deployment
+spec:
+  replicas: 8
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 50%  # Half can be down
+      maxSurge: 50%       # Double pods during update
+  selector:
+    matchLabels:
+      app: aggressive-app
+  template:
+    metadata:
+      labels:
+        app: aggressive-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+---
+# Balanced Rolling Update Strategy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: balanced-deployment
+spec:
+  replicas: 4
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%  # Default
+      maxSurge: 25%       # Default
+  selector:
+    matchLabels:
+      app: balanced-app
+  template:
+    metadata:
+      labels:
+        app: balanced-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.20
+        ports:
+        - containerPort: 80
+        env:
+        - name: VERSION
+          value: "v1.0"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
