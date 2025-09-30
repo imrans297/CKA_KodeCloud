@@ -42,7 +42,7 @@ spec:
     emptyDir: {}
 ```
 
-### Ambassador Pattern
+### Ambassador Pattern / Co-located Containers
 **Purpose**: Proxy container for external services
 **Use Cases**: Service discovery, load balancing, circuit breaking
 
